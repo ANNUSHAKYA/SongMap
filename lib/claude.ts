@@ -10,6 +10,128 @@ function cacheKey(title: string, artist: string) {
 }
 
 /**
+ * Generate a deterministic, realistic fallback song analysis based on title and artist hashing.
+ * Prevents duplicate fallback values on the map when API limits are reached.
+ */
+function getDeterministicFallback(
+  title: string,
+  artist: string,
+  analysisNote: string,
+  youtubeId?: string
+) {
+  const seed = `${title.toLowerCase()}||${artist.toLowerCase()}`
+  let hash = 0
+  for (let i = 0; i < seed.length; i++) {
+    hash = (hash << 5) - hash + seed.charCodeAt(i)
+    hash |= 0 // Convert to 32bit integer
+  }
+  hash = Math.abs(hash)
+
+  // BPM: 70 - 150
+  const bpm = 70 + (hash % 81)
+
+  // Keys
+  const keys = [
+    'C major', 'A minor', 'G major', 'E minor', 'D major', 'B minor',
+    'A major', 'F# minor', 'E major', 'C# minor', 'F major', 'D minor',
+    'Bb major', 'G minor', 'Eb major', 'C minor', 'Ab major', 'F minor'
+  ]
+  const keySignature = keys[hash % keys.length]
+
+  // Time Signature
+  const timeSignature = (hash % 10 === 0) ? '3/4' : '4/4'
+
+  // Energy Level
+  const energyLevel = bpm > 125 ? 'high' : bpm > 95 ? 'medium' : 'low'
+
+  // Moods
+  const moods = {
+    low: ['melancholic', 'dreamy', 'introspective', 'chill', 'somber'],
+    medium: ['chill', 'nostalgic', 'peaceful', 'hopeful', 'mellow'],
+    high: ['uplifting', 'energetic', 'driving', 'passionate', 'intense']
+  }
+  const moodList = moods[energyLevel]
+  const mood = moodList[hash % moodList.length]
+
+  // Genres
+  const genreOptions = [
+    ['indie', 'pop'], ['rock', 'alternative'], ['pop', 'r&b'],
+    ['electronic', 'synthpop'], ['acoustic', 'folk'], ['hip-hop', 'trap'],
+    ['dance', 'house'], ['ambient', 'chillout']
+  ]
+  const genre = genreOptions[hash % genreOptions.length]
+
+  // Instruments
+  let instruments: { name: string; count: number; role: string }[] = []
+  if (energyLevel === 'high') {
+    instruments = [
+      { name: 'Drums', count: bpm, role: 'rhythm' },
+      { name: 'Bass guitar', count: Math.round(bpm / 3), role: 'bass' },
+      { name: 'Electric guitar', count: Math.round(bpm / 2), role: 'harmony' },
+      { name: 'Synthesizer', count: Math.round(bpm / 4), role: 'harmony' },
+      { name: 'Lead vocal', count: Math.round(bpm / 2), role: 'vocal' }
+    ]
+  } else if (energyLevel === 'medium') {
+    instruments = [
+      { name: 'Kick drum', count: bpm, role: 'rhythm' },
+      { name: 'Snare', count: Math.round(bpm / 2), role: 'rhythm' },
+      { name: 'Bass guitar', count: Math.round(bpm / 4), role: 'bass' },
+      { name: 'Acoustic guitar', count: Math.round(bpm / 2), role: 'harmony' },
+      { name: 'Piano', count: Math.round(bpm / 3), role: 'harmony' },
+      { name: 'Lead vocal', count: Math.round(bpm / 2), role: 'vocal' }
+    ]
+  } else {
+    instruments = [
+      { name: 'Soft percussion', count: bpm, role: 'rhythm' },
+      { name: 'Acoustic bass', count: Math.round(bpm / 4), role: 'bass' },
+      { name: 'Piano', count: Math.round(bpm / 2), role: 'harmony' },
+      { name: 'Strings', count: Math.round(bpm / 5), role: 'texture' },
+      { name: 'Lead vocal', count: Math.round(bpm / 2), role: 'vocal' }
+    ]
+  }
+
+  // Beat Pattern
+  const beatPatterns = {
+    low: [
+      `Gentle ${timeSignature} downbeat groove at ${bpm} BPM.`,
+      `Sparse, atmospheric ambient pulses in ${keySignature}.`,
+      `Relaxed acoustic shuffle style with steady ${timeSignature} feel.`
+    ],
+    medium: [
+      `Mid-tempo driving rock/pop groove at ${bpm} BPM.`,
+      `Steady, syncopated pocket beat with smooth drum fills.`,
+      `Bouncy r&b-pop drum machine loop in ${keySignature}.`
+    ],
+    high: [
+      `High-energy, driving four-on-the-floor beat at ${bpm} BPM.`,
+      `Fast-paced, syncopated alternative rock drum pattern.`,
+      `Driving electronic synthpop groove with double-time hats.`
+    ]
+  }
+  const patternList = beatPatterns[energyLevel]
+  const beatPattern = patternList[hash % patternList.length]
+
+  return {
+    title,
+    artist,
+    bpm,
+    keySignature,
+    timeSignature,
+    energyLevel: energyLevel as 'low' | 'medium' | 'high',
+    mood,
+    genre,
+    instruments,
+    totalInstrumentCount: instruments.length,
+    beatPattern,
+    analysisText: analysisNote,
+    previewUrl: undefined as string | undefined,
+    albumArt: undefined as string | undefined,
+    popularity: undefined as number | undefined,
+    youtubeId
+  }
+}
+
+/**
  * Analyze a song using Gemini API. Falls back to mock data when GEMINI_MOCK=true.
  */
 export async function analyzeSong(
@@ -103,127 +225,35 @@ Do NOT include any explanations, markdown, or additional text.`
       p.popularity = spotify.popularity ?? undefined
     }
   } else {
-    // If Gemini failed, build fallback from the pre-fetched Spotify data
+    // If Gemini failed, build fallback from hashing and Spotify (if available)
     console.error('Gemini API error:', geminiError)
     
+    const isQuota = geminiError instanceof GeminiQuotaError
+    const hasSpotify = !!(spotifyData && spotifyData.spotify)
+    const analysisNote = isQuota
+      ? `⚠️ Gemini daily quota reached — showing ${hasSpotify ? 'Spotify audio' : 'generic fallback'} data. Full AI analysis resumes tomorrow.`
+      : `AI analysis temporarily unavailable — showing ${hasSpotify ? 'Spotify audio' : 'generic fallback'} data.`
+
+    const fb = getDeterministicFallback(title, artist, analysisNote, youtubeId)
+
     if (spotifyData && spotifyData.spotify) {
       const { spotify, features } = spotifyData
-      const isQuota = geminiError instanceof GeminiQuotaError
-      const bpm = features?.tempo ? Math.round(features.tempo) : 120
-      const timeSignature = features?.time_signature ? `${features.time_signature}/4` : '4/4'
-      const keySignature = features ? keySignatureFromFeatures(features.key, features.mode) : 'Unknown'
-
-      // Build template instruments from BPM range (meaningful even without AI)
-      const isUpbeat = bpm > 110
-      const isMid    = bpm >= 75 && bpm <= 110
-      const instruments = isUpbeat
-        ? [
-            { name: 'Kick drum',     count: bpm, role: 'rhythm' },
-            { name: 'Snare',         count: Math.round(bpm / 2), role: 'rhythm' },
-            { name: 'Hi-hat',        count: bpm * 2, role: 'rhythm' },
-            { name: 'Bass guitar',   count: Math.round(bpm / 4), role: 'bass' },
-            { name: 'Synth / keys',  count: Math.round(bpm / 3), role: 'harmony' },
-            { name: 'Lead vocal',    count: Math.round(bpm / 2), role: 'vocal' },
-          ]
-        : isMid
-        ? [
-            { name: 'Acoustic guitar', count: Math.round(bpm * 1.5), role: 'harmony' },
-            { name: 'Kick drum',       count: bpm, role: 'rhythm' },
-            { name: 'Snare',           count: Math.round(bpm / 2), role: 'rhythm' },
-            { name: 'Bass',            count: Math.round(bpm / 3), role: 'bass' },
-            { name: 'Lead vocal',      count: Math.round(bpm / 2), role: 'vocal' },
-          ]
-        : [
-            { name: 'Piano / keys',  count: Math.round(bpm * 1.5), role: 'harmony' },
-            { name: 'Soft drums',    count: bpm, role: 'rhythm' },
-            { name: 'Bass',          count: Math.round(bpm / 3), role: 'bass' },
-            { name: 'Strings',       count: Math.round(bpm / 4), role: 'texture' },
-            { name: 'Lead vocal',    count: Math.round(bpm / 2), role: 'vocal' },
-          ]
-
-      const energyLevel = bpm > 130 ? 'high' : bpm > 90 ? 'medium' : 'low'
-      const modeLabel   = keySignature.includes('minor') ? 'minor' : 'major'
-      const moodLabel   = modeLabel === 'minor' ? 'introspective' : 'uplifting'
-      const analysisNote = isQuota
-        ? `⚠️ Gemini daily quota reached — showing Spotify audio data. Full AI analysis resumes tomorrow.`
-        : `AI analysis temporarily unavailable — showing Spotify audio data.`
-
-      p = {
-        title,
-        artist,
-        bpm,
-        keySignature,
-        timeSignature,
-        energyLevel: energyLevel as 'low' | 'medium' | 'high',
-        mood: moodLabel,
-        genre: [],
-        instruments,
-        totalInstrumentCount: instruments.length,
-        beatPattern: `${bpm} BPM ${energyLevel}-energy groove in ${keySignature} (${timeSignature}).`,
-        analysisText: analysisNote,
-        previewUrl: spotify.preview_url ?? undefined,
-        albumArt: spotify.albumArt ?? undefined,
-        popularity: spotify.popularity ?? undefined,
-        youtubeId,
+      if (features) {
+        fb.bpm = Math.round(features.tempo)
+        fb.timeSignature = `${features.time_signature}/4`
+        fb.keySignature = keySignatureFromFeatures(features.key, features.mode)
+        fb.energyLevel = fb.bpm > 125 ? 'high' : fb.bpm > 95 ? 'medium' : 'low'
       }
-    } else if (process.env.GEMINI_MOCK === 'true') {
-      // Deterministic mock based on title/artist
-      const getMockAnalysis = (title: string, artist: string) => {
-        const seed = title + artist
-        let hash = 0
-        for (let i = 0; i < seed.length; i++) {
-          hash += seed.charCodeAt(i)
-        }
-        const bpm = 60 + (hash % 100) // 60-159 BPM
-        const instrumentCount = 2 + (hash % 5) // 2-6 instruments
-        const instruments = Array.from({ length: instrumentCount }).map((_, idx) => ({
-          name: `instrument_${idx + 1}`,
-          count: 1,
-          role: 'rhythm',
-        }))
-        return {
-          title,
-          artist,
-          bpm,
-          keySignature: 'C major',
-          timeSignature: '4/4',
-          energyLevel: 'medium',
-          mood: 'uplifting',
-          genre: ['pop'],
-          instruments,
-          totalInstrumentCount: instrumentCount,
-          beatPattern: 'Standard beat pattern',
-          analysisText: 'Generated mock analysis based on input.',
-          previewUrl: undefined,
-        }
-      }
-      p = getMockAnalysis(title, artist)
-    } else {
-      const isQuota = geminiError instanceof GeminiQuotaError
-      const analysisNote = isQuota
-        ? `⚠️ Gemini daily quota reached — showing generic fallback audio data. Full AI analysis resumes tomorrow.`
-        : `AI analysis temporarily unavailable — showing generic fallback audio data.`
-      p = {
-        title,
-        artist,
-        bpm: 120,
-        keySignature: 'C major',
-        timeSignature: '4/4',
-        energyLevel: 'medium',
-        mood: 'neutral',
-        genre: [],
-        instruments: [
-          { name: 'Drums', count: 1, role: 'rhythm' },
-          { name: 'Bass guitar', count: 1, role: 'bass' },
-          { name: 'Keyboard', count: 1, role: 'harmony' }
-        ],
-        totalInstrumentCount: 3,
-        beatPattern: 'Standard 4/4 pop/rock groove.',
-        analysisText: analysisNote,
-        previewUrl: undefined,
-        albumArt: undefined,
-      }
+      fb.previewUrl = spotify.preview_url ?? undefined
+      fb.albumArt = spotify.albumArt ?? undefined
+      fb.popularity = spotify.popularity ?? undefined
+      
+      // Update beatPattern dynamically based on Spotify BPM & energy
+      const grooveType = fb.energyLevel === 'high' ? 'driving high-energy' : fb.energyLevel === 'medium' ? 'steady mid-tempo' : 'relaxed downbeat'
+      fb.beatPattern = `${fb.bpm} BPM ${grooveType} groove in ${fb.keySignature} (${fb.timeSignature}).`
     }
+
+    p = fb
   }
 
   // Ensure we have a valid analysis object
