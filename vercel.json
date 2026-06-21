@@ -1,0 +1,10 @@
+{
+  "framework": "nextjs",
+  "buildCommand": "npm run build",
+  "outputDirectory": ".next",
+  "installCommand": "npm install",
+  "functions": {
+    "app/api/analyze/route.ts":   { "maxDuration": 60 },
+    "app/api/recommend/route.ts": { "maxDuration": 60 }
+  }
+}
