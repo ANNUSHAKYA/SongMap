@@ -102,8 +102,15 @@ export default function Home() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(p),
       })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Analysis failed.')
+      let data: any
+      const contentType = res.headers.get('content-type')
+      if (contentType && contentType.includes('application/json')) {
+        data = await res.json()
+      } else {
+        const text = await res.text()
+        throw new Error(text || `Request failed with status ${res.status}`)
+      }
+      if (!res.ok) throw new Error(data?.error || 'Analysis failed.')
       
       setSessionId(data.sessionId)
       const rootSong = {
@@ -128,8 +135,15 @@ export default function Home() {
     setError('')
     try {
       const res = await fetch(`/api/songs?sessionId=${sessId}`)
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Failed to load session.')
+      let data: any
+      const contentType = res.headers.get('content-type')
+      if (contentType && contentType.includes('application/json')) {
+        data = await res.json()
+      } else {
+        const text = await res.text()
+        throw new Error(text || `Failed to load session (status ${res.status}).`)
+      }
+      if (!res.ok) throw new Error(data?.error || 'Failed to load session.')
       
       if (data.songs && data.songs.length > 0) {
         setSessionId(sessId)
@@ -167,8 +181,15 @@ export default function Home() {
           depth: song.depth + 1,
         }),
       })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Recommendations failed.')
+      let data: any
+      const contentType = res.headers.get('content-type')
+      if (contentType && contentType.includes('application/json')) {
+        data = await res.json()
+      } else {
+        const text = await res.text()
+        throw new Error(text || `Recommendations failed (status ${res.status}).`)
+      }
+      if (!res.ok) throw new Error(data?.error || 'Recommendations failed.')
 
       const children = (data.recommendations || []).map((r: any) => ({
         id: r.songId,
@@ -232,9 +253,18 @@ export default function Home() {
         }),
       })
 
-      if (!res.ok) throw new Error('Auto-grow call failed')
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || 'Auto-grow call failed')
+      }
 
-      const data = await res.json()
+      let data: any
+      const contentType = res.headers.get('content-type')
+      if (contentType && contentType.includes('application/json')) {
+        data = await res.json()
+      } else {
+        throw new Error('Invalid JSON response from auto-grow call')
+      }
       if (data && data.recommendations) {
         const children = data.recommendations.map((r: any) => ({
           id: r.songId,

@@ -18,11 +18,11 @@ export class GeminiQuotaError extends Error {
 
 /** All models to try in preference order. */
 const MODELS = [
+  'gemini-3-flash-preview',
   // Verified active models with current quota
   'gemini-2.5-flash',
   'gemini-3.5-flash',
   'gemini-3.1-flash-lite',
-  'gemini-3-flash-preview',
   'gemini-flash-latest',
   'gemini-flash-lite-latest',
   

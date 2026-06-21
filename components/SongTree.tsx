@@ -43,8 +43,15 @@ function Node({
           depth:          node.depth + 1,
         }),
       })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error)
+      let data: any
+      const contentType = res.headers.get('content-type')
+      if (contentType && contentType.includes('application/json')) {
+        data = await res.json()
+      } else {
+        const text = await res.text()
+        throw new Error(text || `Recommendations failed (status ${res.status}).`)
+      }
+      if (!res.ok) throw new Error(data?.error || 'Recommendations failed.')
 
       const children: TreeNode[] = (data.recommendations || []).map((r: {
         songId: string; analysis: SongAnalysis; reason: string; youtubeSearchUrl: string
