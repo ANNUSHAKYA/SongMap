@@ -43,96 +43,130 @@ export async function analyzeSong(
 Do NOT include any explanations, markdown, or additional text.`
 
   let p: any = null
-  try {
-    const raw = await callGemini(prompt, 2000)
-    const clean = raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim()
+  let geminiError: any = null
+
+  // Start both Gemini analysis and Spotify data fetching concurrently
+  const geminiPromise = (async () => {
     try {
-      p = JSON.parse(clean)
-    } catch (jsonErr) {
-      // Attempt to extract a JSON object from possibly malformed output
-      const match = clean.match(/\{[\s\S]*\}/)
-      if (match) {
-        try {
-          p = JSON.parse(match[0])
-        } catch (_) {
-          console.error('Failed to parse extracted JSON:', _)
-          p = null
+      const raw = await callGemini(prompt, 2000)
+      const clean = raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim()
+      let parsed = null
+      try {
+        parsed = JSON.parse(clean)
+      } catch (jsonErr) {
+        const match = clean.match(/\{[\s\S]*\}/)
+        if (match) {
+          try {
+            parsed = JSON.parse(match[0])
+          } catch (_) {
+            console.error('Failed to parse extracted JSON:', _)
+          }
+        } else {
+          console.error('No JSON object found in Gemini response')
         }
-      } else {
-        console.error('No JSON object found in Gemini response')
-        p = null
       }
+      return parsed
+    } catch (err) {
+      geminiError = err
+      return null
     }
-  } catch (error) {
-    console.error('Gemini API error:', error)
-    // Always try Spotify as fallback for core data (BPM, key, time, preview)
+  })()
+
+  const spotifyPromise = (async () => {
     try {
       const spotify = await searchTrack(title, artist)
       if (spotify) {
         const features = await getAudioFeatures(spotify.id)
-        const isQuota = error instanceof GeminiQuotaError
-        const bpm = features?.tempo ? Math.round(features.tempo) : 120
-        const timeSignature = features?.time_signature ? `${features.time_signature}/4` : '4/4'
-        const keySignature = features ? keySignatureFromFeatures(features.key, features.mode) : 'Unknown'
-
-        // Build template instruments from BPM range (meaningful even without AI)
-        const isUpbeat = bpm > 110
-        const isMid    = bpm >= 75 && bpm <= 110
-        const instruments = isUpbeat
-          ? [
-              { name: 'Kick drum',     count: bpm, role: 'rhythm' },
-              { name: 'Snare',         count: Math.round(bpm / 2), role: 'rhythm' },
-              { name: 'Hi-hat',        count: bpm * 2, role: 'rhythm' },
-              { name: 'Bass guitar',   count: Math.round(bpm / 4), role: 'bass' },
-              { name: 'Synth / keys',  count: Math.round(bpm / 3), role: 'harmony' },
-              { name: 'Lead vocal',    count: Math.round(bpm / 2), role: 'vocal' },
-            ]
-          : isMid
-          ? [
-              { name: 'Acoustic guitar', count: Math.round(bpm * 1.5), role: 'harmony' },
-              { name: 'Kick drum',       count: bpm, role: 'rhythm' },
-              { name: 'Snare',           count: Math.round(bpm / 2), role: 'rhythm' },
-              { name: 'Bass',            count: Math.round(bpm / 3), role: 'bass' },
-              { name: 'Lead vocal',      count: Math.round(bpm / 2), role: 'vocal' },
-            ]
-          : [
-              { name: 'Piano / keys',  count: Math.round(bpm * 1.5), role: 'harmony' },
-              { name: 'Soft drums',    count: bpm, role: 'rhythm' },
-              { name: 'Bass',          count: Math.round(bpm / 3), role: 'bass' },
-              { name: 'Strings',       count: Math.round(bpm / 4), role: 'texture' },
-              { name: 'Lead vocal',    count: Math.round(bpm / 2), role: 'vocal' },
-            ]
-
-        const energyLevel = bpm > 130 ? 'high' : bpm > 90 ? 'medium' : 'low'
-        const modeLabel   = keySignature.includes('minor') ? 'minor' : 'major'
-        const moodLabel   = modeLabel === 'minor' ? 'introspective' : 'uplifting'
-        const analysisNote = isQuota
-          ? `⚠️ Gemini daily quota reached — showing Spotify audio data. Full AI analysis resumes tomorrow.`
-          : `AI analysis temporarily unavailable — showing Spotify audio data.`
-
-        return {
-          title,
-          artist,
-          bpm,
-          keySignature,
-          timeSignature,
-          energyLevel: energyLevel as 'low' | 'medium' | 'high',
-          mood: moodLabel,
-          genre: [],
-          instruments,
-          totalInstrumentCount: instruments.length,
-          beatPattern: `${bpm} BPM ${energyLevel}-energy groove in ${keySignature} (${timeSignature}).`,
-          analysisText: analysisNote,
-          previewUrl: spotify.preview_url ?? undefined,
-          albumArt: spotify.albumArt ?? undefined,
-          youtubeId,
-        }
-
+        return { spotify, features }
       }
-    } catch (spotifyErr) {
-      console.warn('Spotify fallback also failed:', spotifyErr)
+    } catch (e) {
+      console.warn('Spotify enrichment failed in background:', e)
     }
-    if (process.env.GEMINI_MOCK === 'true') {
+    return null
+  })()
+
+  // Await both operations concurrently
+  const [geminiResult, spotifyData] = await Promise.all([geminiPromise, spotifyPromise])
+
+  if (geminiResult) {
+    p = geminiResult
+    // Enrich with the pre-fetched Spotify data if available
+    if (spotifyData && spotifyData.spotify) {
+      const { spotify, features } = spotifyData
+      if (features) {
+        p.bpm = Math.round(features.tempo)
+        p.timeSignature = `${features.time_signature}/4`
+        p.keySignature = keySignatureFromFeatures(features.key, features.mode)
+      }
+      p.previewUrl = spotify.preview_url ?? undefined
+      p.albumArt = spotify.albumArt ?? undefined
+      p.popularity = spotify.popularity ?? undefined
+    }
+  } else {
+    // If Gemini failed, build fallback from the pre-fetched Spotify data
+    console.error('Gemini API error:', geminiError)
+    
+    if (spotifyData && spotifyData.spotify) {
+      const { spotify, features } = spotifyData
+      const isQuota = geminiError instanceof GeminiQuotaError
+      const bpm = features?.tempo ? Math.round(features.tempo) : 120
+      const timeSignature = features?.time_signature ? `${features.time_signature}/4` : '4/4'
+      const keySignature = features ? keySignatureFromFeatures(features.key, features.mode) : 'Unknown'
+
+      // Build template instruments from BPM range (meaningful even without AI)
+      const isUpbeat = bpm > 110
+      const isMid    = bpm >= 75 && bpm <= 110
+      const instruments = isUpbeat
+        ? [
+            { name: 'Kick drum',     count: bpm, role: 'rhythm' },
+            { name: 'Snare',         count: Math.round(bpm / 2), role: 'rhythm' },
+            { name: 'Hi-hat',        count: bpm * 2, role: 'rhythm' },
+            { name: 'Bass guitar',   count: Math.round(bpm / 4), role: 'bass' },
+            { name: 'Synth / keys',  count: Math.round(bpm / 3), role: 'harmony' },
+            { name: 'Lead vocal',    count: Math.round(bpm / 2), role: 'vocal' },
+          ]
+        : isMid
+        ? [
+            { name: 'Acoustic guitar', count: Math.round(bpm * 1.5), role: 'harmony' },
+            { name: 'Kick drum',       count: bpm, role: 'rhythm' },
+            { name: 'Snare',           count: Math.round(bpm / 2), role: 'rhythm' },
+            { name: 'Bass',            count: Math.round(bpm / 3), role: 'bass' },
+            { name: 'Lead vocal',      count: Math.round(bpm / 2), role: 'vocal' },
+          ]
+        : [
+            { name: 'Piano / keys',  count: Math.round(bpm * 1.5), role: 'harmony' },
+            { name: 'Soft drums',    count: bpm, role: 'rhythm' },
+            { name: 'Bass',          count: Math.round(bpm / 3), role: 'bass' },
+            { name: 'Strings',       count: Math.round(bpm / 4), role: 'texture' },
+            { name: 'Lead vocal',    count: Math.round(bpm / 2), role: 'vocal' },
+          ]
+
+      const energyLevel = bpm > 130 ? 'high' : bpm > 90 ? 'medium' : 'low'
+      const modeLabel   = keySignature.includes('minor') ? 'minor' : 'major'
+      const moodLabel   = modeLabel === 'minor' ? 'introspective' : 'uplifting'
+      const analysisNote = isQuota
+        ? `⚠️ Gemini daily quota reached — showing Spotify audio data. Full AI analysis resumes tomorrow.`
+        : `AI analysis temporarily unavailable — showing Spotify audio data.`
+
+      p = {
+        title,
+        artist,
+        bpm,
+        keySignature,
+        timeSignature,
+        energyLevel: energyLevel as 'low' | 'medium' | 'high',
+        mood: moodLabel,
+        genre: [],
+        instruments,
+        totalInstrumentCount: instruments.length,
+        beatPattern: `${bpm} BPM ${energyLevel}-energy groove in ${keySignature} (${timeSignature}).`,
+        analysisText: analysisNote,
+        previewUrl: spotify.preview_url ?? undefined,
+        albumArt: spotify.albumArt ?? undefined,
+        popularity: spotify.popularity ?? undefined,
+        youtubeId,
+      }
+    } else if (process.env.GEMINI_MOCK === 'true') {
       // Deterministic mock based on title/artist
       const getMockAnalysis = (title: string, artist: string) => {
         const seed = title + artist
@@ -164,9 +198,8 @@ Do NOT include any explanations, markdown, or additional text.`
         }
       }
       p = getMockAnalysis(title, artist)
-
     } else {
-      const isQuota = error instanceof GeminiQuotaError
+      const isQuota = geminiError instanceof GeminiQuotaError
       const analysisNote = isQuota
         ? `⚠️ Gemini daily quota reached — showing generic fallback audio data. Full AI analysis resumes tomorrow.`
         : `AI analysis temporarily unavailable — showing generic fallback audio data.`
@@ -210,25 +243,6 @@ Do NOT include any explanations, markdown, or additional text.`
       beatPattern: '',
       analysisText: '',
     }
-  }
-
-  // Enrich with Spotify data if available
-  try {
-    const spotify = await searchTrack(title, artist)
-    if (spotify) {
-      const features = await getAudioFeatures(spotify.id)
-      if (features) {
-        p.bpm = Math.round(features.tempo)
-        p.timeSignature = `${features.time_signature}/4`
-        p.keySignature = keySignatureFromFeatures(features.key, features.mode)
-      }
-      // Spotify preview (audio snippet) + album art + popularity
-      p.previewUrl = spotify.preview_url ?? undefined
-      p.albumArt = spotify.albumArt ?? undefined
-      p.popularity = spotify.popularity ?? undefined
-    }
-  } catch (e) {
-    console.warn('Spotify enrichment failed:', e)
   }
 
   // Double check previewUrl and set fallback if empty (try iTunes directly first)

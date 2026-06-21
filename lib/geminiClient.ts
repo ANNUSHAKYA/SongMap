@@ -76,41 +76,10 @@ async function callModel(
 
     const errText = await res.text()
 
-    // 429 – rate limit: retry after suggested delay (per-minute limit)
-    if (res.status === 429 && attempt < maxRetries) {
-      let retryDelay = 20000
-      try {
-        const errJson = JSON.parse(errText)
-        const retryInfo = errJson?.error?.details?.find(
-          (d: any) => d['@type']?.includes('RetryInfo'),
-        )
-        if (retryInfo?.retryDelay) {
-          const secs = parseInt(retryInfo.retryDelay.replace('s', ''), 10)
-          retryDelay = (isNaN(secs) ? 20 : secs + 3) * 1000
-        }
-        // If daily quota is 0, mark model as exhausted immediately
-        const violations: any[] = errJson?.error?.details?.find(
-          (d: any) => d['@type']?.includes('QuotaFailure'),
-        )?.violations ?? []
-        const dailyExhausted = violations.some(
-          (v) => v.quotaId?.includes('PerDay') && Number(v.quotaValue) === 0,
-        )
-        if (dailyExhausted) {
-          exhaustedModels.add(model)
-          throw new GeminiQuotaError(`Daily quota exhausted for ${model}`)
-        }
-      } catch (e) {
-        if (e instanceof GeminiQuotaError) throw e
-      }
-      console.warn(`[Gemini] 429 on ${model}, retrying in ${retryDelay / 1000}s`)
-      await new Promise((r) => setTimeout(r, retryDelay))
-      continue
-    }
-
-    // 429 with no retries left → quota exhausted for this model
+    // 429 – rate limit / quota exhausted: throw immediately to rotate model without blocking
     if (res.status === 429) {
       exhaustedModels.add(model)
-      throw new GeminiQuotaError(`Quota exhausted for ${model}: ${errText}`)
+      throw new GeminiQuotaError(`Model ${model} hit rate limit / quota (429). Rotating to next model.`)
     }
 
     // 503 – service unavailable, short retry
