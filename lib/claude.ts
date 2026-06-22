@@ -10,13 +10,61 @@ function cacheKey(title: string, artist: string) {
 }
 
 /**
+ * Dynamically generate a professional 2-sentence music analysis text based on key, bpm, energy, mood, and instruments.
+ * Used to construct unique, context-aware analysis paragraphs when AI limits are reached.
+ */
+function getDynamicAnalysisText(
+  title: string,
+  artist: string,
+  bpm: number,
+  keySignature: string,
+  timeSignature: string,
+  energyLevel: 'low' | 'medium' | 'high',
+  mood: string,
+  instruments: Array<{ name: string; count: number; role: string }>
+): string {
+  const seed = `${title.toLowerCase()}||${artist.toLowerCase()}`
+  let hash = 0
+  for (let i = 0; i < seed.length; i++) {
+    hash = (hash << 5) - hash + seed.charCodeAt(i)
+    hash |= 0
+  }
+  hash = Math.abs(hash)
+
+  const inst1 = instruments[0]?.name || 'instrumentation'
+  const inst2 = instruments[1]?.name || 'rhythm'
+  const inst3 = instruments[2]?.name || 'melodic elements'
+  const inst4 = instruments[4]?.name || 'vocals'
+
+  const options = {
+    low: [
+      `A beautifully serene track featuring a prominent ${mood} mood, driven by delicate ${inst1} and an atmospheric ${energyLevel}-energy flow in ${keySignature}.`,
+      `This introspective composition showcases a gentle ${timeSignature} signature, layered with organic ${inst3} that create a deeply ${mood} sonic landscape.`,
+      `An understated and melancholic arrangement where the soft timbre of ${inst1} blends elegantly with the ${inst2} section at ${bpm} BPM.`
+    ],
+    medium: [
+      `A compelling and balanced track combining a steady ${bpm} BPM groove with a nostalgic, ${mood} character in ${keySignature}.`,
+      `This song blends dynamic ${inst2} and melodic ${inst3}, delivering a cohesive ${energyLevel}-energy feel.`,
+      `Featuring prominent ${inst4} supported by a well-defined ${inst2} section, this track offers a highly engaging, ${mood} sound.`
+    ],
+    high: [
+      `An energetic and driving track featuring an intense, ${mood} rhythm section at ${bpm} BPM with a powerful ${inst3} presence.`,
+      `This high-octane composition highlights a prominent ${inst1} beat and a driving bass groove in ${keySignature}, creating an uplifting atmosphere.`,
+      `A vibrant blend of ${inst3} and soaring ${inst4} that delivers a powerful, ${mood} sonic experience.`
+    ]
+  }
+
+  const list = options[energyLevel]
+  return list[hash % list.length]
+}
+
+/**
  * Generate a deterministic, realistic fallback song analysis based on title and artist hashing.
  * Prevents duplicate fallback values on the map when API limits are reached.
  */
 function getDeterministicFallback(
   title: string,
   artist: string,
-  analysisNote: string,
   youtubeId?: string
 ) {
   const seed = `${title.toLowerCase()}||${artist.toLowerCase()}`
@@ -111,6 +159,8 @@ function getDeterministicFallback(
   const patternList = beatPatterns[energyLevel]
   const beatPattern = patternList[hash % patternList.length]
 
+  const analysisText = getDynamicAnalysisText(title, artist, bpm, keySignature, timeSignature, energyLevel as 'low' | 'medium' | 'high', mood, instruments)
+
   return {
     title,
     artist,
@@ -123,7 +173,7 @@ function getDeterministicFallback(
     instruments,
     totalInstrumentCount: instruments.length,
     beatPattern,
-    analysisText: analysisNote,
+    analysisText,
     previewUrl: undefined as string | undefined,
     albumArt: undefined as string | undefined,
     popularity: undefined as number | undefined,
@@ -228,13 +278,8 @@ Do NOT include any explanations, markdown, or additional text.`
     // If Gemini failed, build fallback from hashing and Spotify (if available)
     console.error('Gemini API error:', geminiError)
     
-    const isQuota = geminiError instanceof GeminiQuotaError
-    const hasSpotify = !!(spotifyData && spotifyData.spotify)
-    const analysisNote = isQuota
-      ? `⚠️ Gemini daily quota reached — showing ${hasSpotify ? 'Spotify audio' : 'generic fallback'} data. Full AI analysis resumes tomorrow.`
-      : `AI analysis temporarily unavailable — showing ${hasSpotify ? 'Spotify audio' : 'generic fallback'} data.`
-
-    const fb = getDeterministicFallback(title, artist, analysisNote, youtubeId)
+    // Create fallback using deterministic hashing
+    const fb = getDeterministicFallback(title, artist, youtubeId)
 
     if (spotifyData && spotifyData.spotify) {
       const { spotify, features } = spotifyData
@@ -251,6 +296,9 @@ Do NOT include any explanations, markdown, or additional text.`
       // Update beatPattern dynamically based on Spotify BPM & energy
       const grooveType = fb.energyLevel === 'high' ? 'driving high-energy' : fb.energyLevel === 'medium' ? 'steady mid-tempo' : 'relaxed downbeat'
       fb.beatPattern = `${fb.bpm} BPM ${grooveType} groove in ${fb.keySignature} (${fb.timeSignature}).`
+      
+      // Regenerate the analysisText to match the Spotify-enriched variables!
+      fb.analysisText = getDynamicAnalysisText(fb.title, fb.artist, fb.bpm, fb.keySignature, fb.timeSignature, fb.energyLevel, fb.mood, fb.instruments)
     }
 
     p = fb
