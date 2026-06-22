@@ -48,6 +48,7 @@ export default function Home() {
   
   const [isGrowing, setIsGrowing] = useState(false)
   const isGrowingRef = useRef(false)
+  const attemptedExpandedIdsRef = useRef<Set<string>>(new Set())
   
   const [viewMode, setViewMode] = useState<'tree' | 'list'>('tree')
   const lastSongsLengthRef = useRef(0)
@@ -95,6 +96,7 @@ export default function Home() {
     setSessionSongs([])
     setActiveSongId(null)
     setViewMode('tree')
+    attemptedExpandedIdsRef.current.clear()
     
     try {
       const res = await fetch((process.env.NEXT_PUBLIC_API_URL || '') + '/api/analyze', {
@@ -133,6 +135,7 @@ export default function Home() {
   const handleLoadSession = async (sessId: string) => {
     setLoading(true)
     setError('')
+    attemptedExpandedIdsRef.current.clear()
     try {
       const res = await fetch((process.env.NEXT_PUBLIC_API_URL || '') + `/api/songs?sessionId=${sessId}`)
       let data: any
@@ -170,6 +173,7 @@ export default function Home() {
     if (!song) return
 
     setExpandingId(songId)
+    attemptedExpandedIdsRef.current.add(songId)
     try {
       const res = await fetch((process.env.NEXT_PUBLIC_API_URL || '') + '/api/recommend', {
         method: 'POST',
@@ -230,9 +234,11 @@ export default function Home() {
     }
 
     // Find the next node to expand
-    // An unexpanded node is one where depth < 10 and no other song lists it as a parent
+    // An unexpanded node is one where depth < 10, no other song lists it as a parent, and we haven't attempted it yet
     const parentIds = new Set(currentSongs.map(s => s.parentId).filter(Boolean))
-    const unexpanded = currentSongs.find(s => s.depth < 10 && !parentIds.has(s.id))
+    const unexpanded = currentSongs.find(
+      s => s.depth < 10 && !parentIds.has(s.id) && !attemptedExpandedIdsRef.current.has(s.id)
+    )
 
     if (!unexpanded) {
       setIsGrowing(false)
@@ -241,6 +247,7 @@ export default function Home() {
     }
 
     setExpandingId(unexpanded.id)
+    attemptedExpandedIdsRef.current.add(unexpanded.id)
     try {
       const res = await fetch((process.env.NEXT_PUBLIC_API_URL || '') + '/api/recommend', {
         method: 'POST',
