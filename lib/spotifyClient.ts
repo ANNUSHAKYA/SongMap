@@ -76,7 +76,11 @@ function isMatch(artist1: string, title1: string, artist2: string, title2: strin
   const ct1 = cleanString(title1)
   const ct2 = cleanString(title2)
 
-  const artistMatch = ignoreArtist || ca1.includes(ca2) || ca2.includes(ca1)
+  // Normalize artist names by stripping 'vevo' and stripping spaces/punctuation
+  const sa1 = ca1.replace(/vevo$/i, '').replace(/[^a-z0-9]/g, '')
+  const sa2 = ca2.replace(/vevo$/i, '').replace(/[^a-z0-9]/g, '')
+
+  const artistMatch = ignoreArtist || sa1.includes(sa2) || sa2.includes(sa1)
   const titleMatch = ct1.includes(ct2) || ct2.includes(ct1)
 
   return artistMatch && titleMatch
@@ -110,27 +114,29 @@ export async function searchTrack(title: string, artist: string): Promise<Spotif
     const items: any[] = data.tracks?.items ?? []
     if (items.length === 0) return null
 
-    // Filter to find the best match where the artist matches (case-insensitive fuzzy check)
+    // Filter to find the best match where the artist matches (normal or reversed)
     let matchedItems = items.filter(t => {
-      const trackArtists = t.artists?.map((a: any) => cleanString(a.name)) || []
-      const targetArtistClean = cleanString(artist)
-      return trackArtists.some((aName: string) => {
-        return targetArtistClean.includes(aName) || aName.includes(targetArtistClean)
-      })
+      const trackTitle = t.name || ''
+      const trackArtists = t.artists?.map((a: any) => a.name).join(' ') || ''
+      
+      const normalMatch = isMatch(artist, title, trackArtists, trackTitle)
+      const reversedMatch = isMatch(title, artist, trackArtists, trackTitle)
+      
+      return normalMatch || reversedMatch
     })
 
-    // If artist matches, try to narrow down by title match
-    if (matchedItems.length > 0) {
-      const titleMatches = matchedItems.filter(t => {
-        const ct1 = cleanString(title)
-        const ct2 = cleanString(t.name)
-        return ct1.includes(ct2) || ct2.includes(ct1)
+    // If we have multiple matches, prioritize exact title matches
+    if (matchedItems.length > 1) {
+      const exactTitleMatches = matchedItems.filter(t => {
+        return cleanString(title) === cleanString(t.name)
       })
-      if (titleMatches.length > 0) {
-        matchedItems = titleMatches
+      if (exactTitleMatches.length > 0) {
+        matchedItems = exactTitleMatches
       }
-    } else {
-      // Fallback: If no direct artist match, check for significant overlap in artist name
+    }
+
+    // Safety fallback: if no matches, check for significant overlap in artist name
+    if (matchedItems.length === 0) {
       const targetArtistWords = cleanString(artist).split(' ').filter(w => w.length > 2)
       matchedItems = items.filter(t => {
         const trackArtists = t.artists?.map((a: any) => cleanString(a.name)) || []
@@ -138,9 +144,18 @@ export async function searchTrack(title: string, artist: string): Promise<Spotif
           return targetArtistWords.some(word => aName.includes(word))
         })
       })
+      
+      if (matchedItems.length > 1) {
+        const exactTitleMatches = matchedItems.filter(t => {
+          return cleanString(title) === cleanString(t.name)
+        })
+        if (exactTitleMatches.length > 0) {
+          matchedItems = exactTitleMatches
+        }
+      }
     }
 
-    // Safety fallback: if still no matches, only accept if title is an exact match
+    // Double safety fallback: if still no matches, only accept if title is an exact match
     if (matchedItems.length === 0) {
       const strictTitleMatches = items.filter(t => {
         return cleanString(title) === cleanString(t.name)
