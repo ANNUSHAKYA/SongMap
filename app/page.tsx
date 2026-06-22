@@ -73,7 +73,7 @@ export default function Home() {
   // Fetch recent sessions on mount
   const fetchRecent = useCallback(async () => {
     try {
-      const res = await fetch('/api/songs')
+      const res = await fetch((process.env.NEXT_PUBLIC_API_URL || '') + '/api/songs')
       const data = await res.json()
       if (res.ok && data.sessions) {
         setRecentSessions(data.sessions)
@@ -97,7 +97,7 @@ export default function Home() {
     setViewMode('tree')
     
     try {
-      const res = await fetch('/api/analyze', {
+      const res = await fetch((process.env.NEXT_PUBLIC_API_URL || '') + '/api/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(p),
@@ -134,7 +134,7 @@ export default function Home() {
     setLoading(true)
     setError('')
     try {
-      const res = await fetch(`/api/songs?sessionId=${sessId}`)
+      const res = await fetch((process.env.NEXT_PUBLIC_API_URL || '') + `/api/songs?sessionId=${sessId}`)
       let data: any
       const contentType = res.headers.get('content-type')
       if (contentType && contentType.includes('application/json')) {
@@ -171,7 +171,7 @@ export default function Home() {
 
     setExpandingId(songId)
     try {
-      const res = await fetch('/api/recommend', {
+      const res = await fetch((process.env.NEXT_PUBLIC_API_URL || '') + '/api/recommend', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -242,7 +242,7 @@ export default function Home() {
 
     setExpandingId(unexpanded.id)
     try {
-      const res = await fetch('/api/recommend', {
+      const res = await fetch((process.env.NEXT_PUBLIC_API_URL || '') + '/api/recommend', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

@@ -33,7 +33,7 @@ function Node({
     // fetch
     onUpdate({ ...node, isLoadingRecs: true })
     try {
-      const res  = await fetch('/api/recommend', {
+      const res  = await fetch((process.env.NEXT_PUBLIC_API_URL || '') + '/api/recommend', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
