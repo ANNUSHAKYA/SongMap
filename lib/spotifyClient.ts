@@ -83,71 +83,94 @@ function isMatch(artist1: string, title1: string, artist2: string, title2: strin
 }
 
 export async function searchTrack(title: string, artist: string): Promise<SpotifyTrack | null> {
-  const token = await getAccessToken()
-  const query = encodeURIComponent(`track:${title} artist:${artist}`)
-  const url = `https://api.spotify.com/v1/search?q=${query}&type=track&limit=5`
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${token}` },
-  })
-  if (res.status === 401) {
-    cachedToken = null
-  }
-  if (!res.ok) return null
-  const data = await res.json()
-  const items: any[] = data.tracks?.items ?? []
-  
-  // 1. Try to find matched items verifying both artist and title
-  let matchedItems = items.filter(t => {
-    const trackTitle = t.name || ''
-    const trackArtists = t.artists?.map((a: any) => a.name).join(' ') || ''
-    return isMatch(artist, title, trackArtists, trackTitle)
-  })
+  try {
+    const token = await getAccessToken()
+    
+    // Clean terms for query to avoid strict API issues
+    const cleanTitle = title
+      .replace(/\(.*?\)/g, '')
+      .replace(/\[.*?\]/g, '')
+      .replace(/\s*(official\s*)?(music\s*)?video/gi, '')
+      .trim()
+    const cleanArtist = artist.replace(/\(.*?\)/g, '').replace(/\[.*?\]/g, '').trim()
 
-  // 2. If verified fails, try title-only search as fallback (e.g. if artist is misspelled/hallucinated)
-  if (matchedItems.length === 0 && items.length > 0) {
-    matchedItems = items.filter(t => {
-      const trackTitle = t.name || ''
-      const trackArtists = t.artists?.map((a: any) => a.name).join(' ') || ''
-      return isMatch(artist, title, trackArtists, trackTitle, true) // ignoreArtist = true
+    // Try a fuzzy search with artist name and song title (much more robust)
+    const query = encodeURIComponent(`${cleanArtist} ${cleanTitle}`)
+    const url = `https://api.spotify.com/v1/search?q=${query}&type=track&limit=10`
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
     })
-  }
-
-  // 3. If still 0, try searching Spotify with title-only query
-  if (matchedItems.length === 0) {
-    try {
-      const titleOnlyUrl = `https://api.spotify.com/v1/search?q=${encodeURIComponent(title)}&type=track&limit=5`
-      const resTitle = await fetch(titleOnlyUrl, { headers: { Authorization: `Bearer ${token}` } })
-      if (resTitle.ok) {
-        const dataTitle = await resTitle.json()
-        const itemsTitle = dataTitle.tracks?.items ?? []
-        matchedItems = itemsTitle.filter((t: any) => {
-          const trackTitle = t.name || ''
-          const trackArtists = t.artists?.map((a: any) => a.name).join(' ') || ''
-          return isMatch(artist, title, trackArtists, trackTitle, true) // ignoreArtist = true
-        })
-      }
-    } catch (e) {
-      console.warn('[Spotify Title-Only Fallback Exception]', e)
+    
+    if (res.status === 401) {
+      cachedToken = null
     }
-  }
+    if (!res.ok) return null
+    
+    const data = await res.json()
+    const items: any[] = data.tracks?.items ?? []
+    if (items.length === 0) return null
 
-  if (matchedItems.length === 0) return null
+    // Filter to find the best match where the artist matches (case-insensitive fuzzy check)
+    let matchedItems = items.filter(t => {
+      const trackArtists = t.artists?.map((a: any) => cleanString(a.name)) || []
+      const targetArtistClean = cleanString(artist)
+      return trackArtists.some((aName: string) => {
+        return targetArtistClean.includes(aName) || aName.includes(targetArtistClean)
+      })
+    })
 
-  // Prefer a track that has a 30-sec preview
-  const best = matchedItems.find(t => t.preview_url) ?? matchedItems[0]
+    // If artist matches, try to narrow down by title match
+    if (matchedItems.length > 0) {
+      const titleMatches = matchedItems.filter(t => {
+        const ct1 = cleanString(title)
+        const ct2 = cleanString(t.name)
+        return ct1.includes(ct2) || ct2.includes(ct1)
+      })
+      if (titleMatches.length > 0) {
+        matchedItems = titleMatches
+      }
+    } else {
+      // Fallback: If no direct artist match, check for significant overlap in artist name
+      const targetArtistWords = cleanString(artist).split(' ').filter(w => w.length > 2)
+      matchedItems = items.filter(t => {
+        const trackArtists = t.artists?.map((a: any) => cleanString(a.name)) || []
+        return trackArtists.some((aName: string) => {
+          return targetArtistWords.some(word => aName.includes(word))
+        })
+      })
+    }
 
-  let preview_url = best.preview_url ?? null
-  if (!preview_url) {
-    preview_url = await fetchiTunesPreview(best.name || title, best.artists?.[0]?.name || artist)
-  }
+    // Safety fallback: if still no matches, only accept if title is an exact match
+    if (matchedItems.length === 0) {
+      const strictTitleMatches = items.filter(t => {
+        return cleanString(title) === cleanString(t.name)
+      })
+      if (strictTitleMatches.length > 0) {
+        matchedItems = strictTitleMatches
+      } else {
+        return null // Safer to return null than the wrong song preview!
+      }
+    }
 
-  return {
-    id: best.id,
-    name: best.name,
-    artists: best.artists.map((a: any) => a.name),
-    preview_url,
-    albumArt: best.album?.images?.[0]?.url ?? null,
-    popularity: best.popularity ?? null,
+    // Prefer a track that has a 30-sec preview
+    const best = matchedItems.find(t => t.preview_url) ?? matchedItems[0]
+
+    let preview_url = best.preview_url ?? null
+    if (!preview_url) {
+      preview_url = await fetchiTunesPreview(best.name || title, best.artists?.[0]?.name || artist)
+    }
+
+    return {
+      id: best.id,
+      name: best.name,
+      artists: best.artists.map((a: any) => a.name),
+      preview_url,
+      albumArt: best.album?.images?.[0]?.url ?? null,
+      popularity: best.popularity ?? null,
+    }
+  } catch (err) {
+    console.error('[Spotify searchTrack Fail]', err)
+    return null
   }
 }
 
@@ -178,19 +201,13 @@ export async function getSpotifyRecommendations(
   try {
     const token = await getAccessToken()
     
-    // First, find the track on Spotify to get its ID
-    const query = encodeURIComponent(`track:${title} artist:${artist}`)
-    const searchUrl = `https://api.spotify.com/v1/search?q=${query}&type=track&limit=1`
-    const searchRes = await fetch(searchUrl, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-    if (searchRes.status === 401) {
-      cachedToken = null
+    // Use our robust searchTrack helper to find the track and retrieve the correct ID
+    const track = await searchTrack(title, artist)
+    if (!track) {
+      console.warn(`[Spotify Recs] Could not find seed track for "${title}" by "${artist}"`)
+      return null
     }
-    if (!searchRes.ok) return null
-    const searchData = await searchRes.json()
-    const track = searchData.tracks?.items?.[0]
-    if (!track) return null
+
     let url = `https://api.spotify.com/v1/recommendations?seed_tracks=${track.id}&limit=20`
     if (targetBpm) {
       url += `&target_tempo=${targetBpm}`
